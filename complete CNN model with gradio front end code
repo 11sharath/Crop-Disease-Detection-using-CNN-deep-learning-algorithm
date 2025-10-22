@@ -1,0 +1,142 @@
+import os
+import zipfile
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras import layers, models
+import gradio as gr
+import numpy as np
+from tensorflow.keras.preprocessing import image
+
+# ===========================
+# 1. Unzip Dataset
+# ===========================
+zip_path = "cropdDetection.zip"   # <-- your zip file
+extract_dir = "dataset"
+
+if not os.path.exists(extract_dir):
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(extract_dir)
+    print(f"✅ Extracted {zip_path} into '{extract_dir}'")
+else:
+    print("✅ Dataset already extracted.")
+
+print("\n📂 Top-level extracted contents:", os.listdir(extract_dir))
+
+# ===========================
+# 2. Dataset Root
+# ===========================
+dataset_dir = extract_dir   # since your classes are directly inside dataset/
+print(f"\n✅ Using dataset folder: {dataset_dir}")
+
+# ===========================
+# 3. Verify Dataset Structure
+# ===========================
+print("\n📂 Checking dataset structure:")
+for root, dirs, files in os.walk(dataset_dir):
+    print(root, "->", len(files), "files")
+
+# ===========================
+# 4. Data Generators
+# ===========================
+IMG_SIZE = (128, 128)
+BATCH_SIZE = 32
+
+datagen = ImageDataGenerator(
+    rescale=1./255,
+    validation_split=0.2,
+    horizontal_flip=True,
+    rotation_range=20,
+    zoom_range=0.2
+)
+
+train_gen = datagen.flow_from_directory(
+    dataset_dir,
+    target_size=IMG_SIZE,
+    batch_size=BATCH_SIZE,
+    class_mode="categorical",
+    subset="training"
+)
+
+val_gen = datagen.flow_from_directory(
+    dataset_dir,
+    target_size=IMG_SIZE,
+    batch_size=BATCH_SIZE,
+    class_mode="categorical",
+    subset="validation"
+)
+
+# ===========================
+# 5. Build CNN Model
+# ===========================
+num_classes = len(train_gen.class_indices)
+class_labels = list(train_gen.class_indices.keys())
+print("\n✅ Classes:", class_labels)
+
+model = models.Sequential([
+    layers.Conv2D(32, (3,3), activation="relu", input_shape=(128,128,3)),
+    layers.MaxPooling2D(2,2),
+    layers.Conv2D(64, (3,3), activation="relu"),
+    layers.MaxPooling2D(2,2),
+    layers.Conv2D(128, (3,3), activation="relu"),
+    layers.MaxPooling2D(2,2),
+    layers.Flatten(),
+    layers.Dense(128, activation="relu"),
+    layers.Dropout(0.5),
+    layers.Dense(num_classes, activation="softmax")
+])
+
+model.compile(optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"])
+model.summary()
+
+# ===========================
+# 6. Training
+# ===========================
+history = model.fit(train_gen, validation_data=val_gen, epochs=10)
+
+# ===========================
+# 7. Plot Training Curves
+# ===========================
+plt.figure()
+plt.plot(history.history["accuracy"], label="Train Accuracy")
+plt.plot(history.history["val_accuracy"], label="Val Accuracy")
+plt.legend()
+plt.xlabel("Epoch")
+plt.ylabel("Accuracy")
+plt.title("Training vs Validation Accuracy")
+plt.savefig("training_curve.png")
+print("\n✅ Training curve saved as training_curve.png")
+
+# ===========================
+# 8. Save Model
+# ===========================
+save_path = os.path.join(os.getcwd(), "crop_disease_model.h5")
+model.save(save_path)
+print(f"\n✅ Model saved successfully at: {save_path}")
+
+# ===========================
+# 9. Gradio Frontend
+# ===========================
+def predict(img):
+    img = img.resize((128, 128))
+    img_array = image.img_to_array(img)
+    img_array = np.expand_dims(img_array, axis=0) / 255.0
+
+    predictions = model.predict(img_array)
+    class_idx = np.argmax(predictions[0])
+    confidence = float(np.max(predictions[0]))
+    return {class_labels[class_idx]: confidence}
+
+demo = gr.Interface(
+    fn=predict,
+    inputs=gr.Image(type="pil"),
+    outputs=gr.Label(num_top_classes=len(class_labels)),
+    title="🌾 Crop Disease Detection",
+    description="Upload a crop leaf image and the model will predict the disease."
+)
+
+# ===========================
+# 10. Launch App
+# ===========================
+if __name__ == "__main__":
+    demo.launch()
